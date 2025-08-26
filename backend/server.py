@@ -227,20 +227,30 @@ async def get_routine_history(user_id: str, limit: int = 7):
 @api_router.get("/chat/history/{user_id}")
 async def get_chat_history(user_id: str, limit: int = 10):
     """Get chat history for a user"""
-    chats_cursor = db.chats.find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
-    chats = await chats_cursor.to_list(limit)
-    
-    # Parse datetime strings back to datetime objects for Pydantic
-    parsed_chats = []
-    for chat in chats:
-        if isinstance(chat.get('timestamp'), str):
+    try:
+        chats_cursor = db.chats.find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
+        chats = await chats_cursor.to_list(limit)
+        
+        # Parse datetime strings back to datetime objects for Pydantic
+        parsed_chats = []
+        for chat in chats:
             try:
-                chat['timestamp'] = datetime.fromisoformat(chat['timestamp'].replace('Z', '+00:00'))
-            except:
-                chat['timestamp'] = datetime.now(timezone.utc)
-        parsed_chats.append(ChatMessage(**chat))
-    
-    return parsed_chats
+                if isinstance(chat.get('timestamp'), str):
+                    chat['timestamp'] = datetime.fromisoformat(chat['timestamp'].replace('Z', '+00:00'))
+                elif not isinstance(chat.get('timestamp'), datetime):
+                    chat['timestamp'] = datetime.now(timezone.utc)
+                
+                # Ensure all required fields exist
+                chat_obj = ChatMessage(**chat)
+                parsed_chats.append(chat_obj)
+            except Exception as e:
+                logger.error(f"Error parsing chat record: {e}")
+                continue
+        
+        return parsed_chats
+    except Exception as e:
+        logger.error(f"Error retrieving chat history: {e}")
+        return []
 
 @api_router.get("/news")
 async def get_news():
