@@ -85,11 +85,20 @@ def get_ai_chat(user_id: str):
 
 # Helper Functions
 def prepare_for_mongo(data):
-    """Convert datetime objects to ISO strings for MongoDB storage"""
+    """Convert datetime objects to ISO strings and remove ObjectIds for MongoDB storage"""
     if isinstance(data, dict):
+        clean_data = {}
         for key, value in data.items():
-            if isinstance(value, datetime):
-                data[key] = value.isoformat()
+            # Skip ObjectId fields
+            if hasattr(value, '__class__') and 'ObjectId' in str(value.__class__):
+                continue
+            elif isinstance(value, datetime):
+                clean_data[key] = value.isoformat()
+            elif isinstance(value, dict):
+                clean_data[key] = prepare_for_mongo(value)
+            else:
+                clean_data[key] = value
+        return clean_data
     return data
 
 async def get_weather_data(lat: float = 28.6139, lon: float = 77.2090):
