@@ -237,6 +237,9 @@ async def get_routine_history(user_id: str, limit: int = 7):
 async def get_chat_history(user_id: str, limit: int = 10):
     """Get chat history for a user"""
     try:
+        # Temporary debug: return empty list to isolate the issue
+        return []
+        
         chats_cursor = db.chats.find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
         chats_raw = await chats_cursor.to_list(limit)
         
