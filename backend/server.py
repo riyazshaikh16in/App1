@@ -234,19 +234,26 @@ async def get_chat_history(user_id: str, limit: int = 10):
         parsed_chats = []
         for chat_raw in chats_raw:
             try:
+                # Remove any ObjectId fields that might have slipped through
+                clean_chat = {}
+                for key, value in chat_raw.items():
+                    if hasattr(value, '__class__') and 'ObjectId' in str(value.__class__):
+                        continue  # Skip ObjectId fields
+                    clean_chat[key] = value
+                
                 # Handle timestamp parsing
-                if isinstance(chat_raw.get('timestamp'), str):
-                    chat_raw['timestamp'] = datetime.fromisoformat(chat_raw['timestamp'].replace('Z', '+00:00'))
-                elif not isinstance(chat_raw.get('timestamp'), datetime):
-                    chat_raw['timestamp'] = datetime.now(timezone.utc)
+                if isinstance(clean_chat.get('timestamp'), str):
+                    clean_chat['timestamp'] = datetime.fromisoformat(clean_chat['timestamp'].replace('Z', '+00:00'))
+                elif not isinstance(clean_chat.get('timestamp'), datetime):
+                    clean_chat['timestamp'] = datetime.now(timezone.utc)
                 
                 # Create ChatMessage, handling missing fields
                 chat_data = {
-                    'id': chat_raw.get('id', str(uuid.uuid4())),
-                    'message': chat_raw.get('message', ''),
-                    'response': chat_raw.get('response', ''),
-                    'context': chat_raw.get('context'),
-                    'timestamp': chat_raw['timestamp']
+                    'id': clean_chat.get('id', str(uuid.uuid4())),
+                    'message': clean_chat.get('message', ''),
+                    'response': clean_chat.get('response', ''),
+                    'context': clean_chat.get('context'),
+                    'timestamp': clean_chat['timestamp']
                 }
                 
                 chat_obj = ChatMessage(**chat_data)
