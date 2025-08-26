@@ -154,10 +154,20 @@ async def chat_with_ai(request: ChatRequest):
             weather = await get_weather_data()
 
         # Get user's recent routine data for context
-        recent_routine = await db.routines.find_one(
+        recent_routine_raw = await db.routines.find_one(
             {"user_id": request.user_id},
+            {"_id": 0},  # Exclude ObjectId
             sort=[("timestamp", -1)]
         )
+        
+        # Clean recent_routine data to remove any ObjectId fields
+        recent_routine = None
+        if recent_routine_raw:
+            recent_routine = {}
+            for key, value in recent_routine_raw.items():
+                if hasattr(value, '__class__') and 'ObjectId' in str(value.__class__):
+                    continue  # Skip ObjectId fields
+                recent_routine[key] = value
 
         # Build context for AI
         context = {
