@@ -207,11 +207,22 @@ async def save_routine(request: RoutineRequest):
 @api_router.get("/routine/{user_id}")
 async def get_routine_history(user_id: str, limit: int = 7):
     """Get routine history for a user"""
-    routines = await db.routines.find(
-        {"user_id": user_id}
-    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    routines_cursor = db.routines.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).sort("timestamp", -1).limit(limit)
+    routines = await routines_cursor.to_list(limit)
     
-    return [RoutineEntry(**routine) for routine in routines]
+    # Parse datetime strings back to datetime objects for Pydantic
+    parsed_routines = []
+    for routine in routines:
+        if isinstance(routine.get('timestamp'), str):
+            try:
+                routine['timestamp'] = datetime.fromisoformat(routine['timestamp'].replace('Z', '+00:00'))
+            except:
+                routine['timestamp'] = datetime.now(timezone.utc)
+        parsed_routines.append(RoutineEntry(**routine))
+    
+    return parsed_routines
 
 @api_router.get("/chat/history/{user_id}")
 async def get_chat_history(user_id: str, limit: int = 10):
