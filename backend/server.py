@@ -201,7 +201,7 @@ async def save_routine(request: RoutineRequest):
     """Save daily routine data"""
     routine = RoutineEntry(**request.dict())
     routine_dict = prepare_for_mongo(routine.dict())
-    await db.routines.insert_one(routine_dict)
+    result = await db.routines.insert_one(routine_dict)
     return routine
 
 @api_router.get("/routine/{user_id}")
