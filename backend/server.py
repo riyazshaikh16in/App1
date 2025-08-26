@@ -182,7 +182,7 @@ Please provide a helpful recommendation considering the weather and time."""
         
         # Store in database
         chat_dict = prepare_for_mongo(chat_record.dict())
-        await db.chats.insert_one(chat_dict)
+        result = await db.chats.insert_one(chat_dict)
         
         return chat_record
         
