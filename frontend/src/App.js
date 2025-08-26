@@ -20,7 +20,7 @@ import {
   Send,
   Sun,
   CloudRain,
-  News,
+  Newspaper,
   Calendar
 } from 'lucide-react';
 import axios from 'axios';
