@@ -1,15 +1,16 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
+from datetime import datetime, timezone
 import uuid
-from datetime import datetime
-
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -19,38 +20,215 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
+# API Keys
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+OPENWEATHER_KEY = os.environ.get('OPENWEATHER_KEY')
+
 # Create the main app without a prefix
-app = FastAPI()
+app = FastAPI(title="Din Charya AI", description="AI-powered daily assistant")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
-
-# Define Models
-class StatusCheck(BaseModel):
+# Pydantic Models
+class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    message: str
+    response: str
+    context: Optional[dict] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class ChatRequest(BaseModel):
+    message: str
+    user_id: str = "default_user"
+    location: Optional[dict] = None
 
-# Add your routes to the router instead of directly to app
+class WeatherData(BaseModel):
+    temperature: float
+    condition: str
+    location: str
+    humidity: Optional[int] = None
+    feels_like: Optional[float] = None
+
+class RoutineEntry(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = "default_user"
+    date: str
+    sleep_hours: Optional[float] = None
+    water_glasses: Optional[int] = None
+    exercise_minutes: Optional[int] = None
+    mood: Optional[str] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class RoutineRequest(BaseModel):
+    user_id: str = "default_user"
+    date: str
+    sleep_hours: Optional[float] = None
+    water_glasses: Optional[int] = None
+    exercise_minutes: Optional[int] = None
+    mood: Optional[str] = None
+
+# Initialize Claude AI
+def get_ai_chat(user_id: str):
+    return LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"dincharya_{user_id}",
+        system_message="""You are Din Charya AI, a helpful daily life assistant. You help users make smart daily decisions about:
+        - What to eat (considering time, weather, preferences, health)
+        - What to wear (based on weather, occasion, season)
+        - Daily activities and productivity tips
+        - Routine tracking and habit building
+        - Weekend planning and entertainment
+
+        Always provide practical, personalized suggestions with brief explanations. Be friendly, encouraging, and consider the user's context like weather and time of day. Keep responses concise but helpful."""
+    ).with_model("anthropic", "claude-3-7-sonnet-20250219")
+
+# Helper Functions
+def prepare_for_mongo(data):
+    """Convert datetime objects to ISO strings for MongoDB storage"""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, datetime):
+                data[key] = value.isoformat()
+    return data
+
+async def get_weather_data(lat: float = 28.6139, lon: float = 77.2090):
+    """Get weather data from OpenWeatherMap API"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.openweathermap.org/data/2.5/weather",
+                params={
+                    "lat": lat,
+                    "lon": lon,
+                    "appid": OPENWEATHER_KEY,
+                    "units": "metric"
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            return WeatherData(
+                temperature=data["main"]["temp"],
+                condition=data["weather"][0]["description"],
+                location=data["name"],
+                humidity=data["main"]["humidity"],
+                feels_like=data["main"]["feels_like"]
+            )
+    except Exception as e:
+        logger.error(f"Weather API error: {e}")
+        return WeatherData(
+            temperature=25.0,
+            condition="partly cloudy",
+            location="Delhi",
+            humidity=60,
+            feels_like=26.0
+        )
+
+# API Routes
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Din Charya AI is running!", "status": "healthy"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
+@api_router.post("/chat", response_model=ChatMessage)
+async def chat_with_ai(request: ChatRequest):
+    try:
+        # Get current weather for context
+        weather = None
+        if request.location:
+            weather = await get_weather_data(
+                request.location.get('lat', 28.6139),
+                request.location.get('lon', 77.2090)
+            )
+        else:
+            weather = await get_weather_data()
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
+        # Get user's recent routine data for context
+        recent_routine = await db.routines.find_one(
+            {"user_id": request.user_id},
+            sort=[("timestamp", -1)]
+        )
+
+        # Build context for AI
+        context = {
+            "weather": weather.dict() if weather else None,
+            "recent_routine": recent_routine,
+            "time": datetime.now(timezone.utc).strftime("%H:%M"),
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        }
+
+        # Create AI message with context
+        ai_message = f"""Current context:
+Weather: {weather.temperature}°C, {weather.condition} in {weather.location}
+Time: {context['time']}
+Date: {context['date']}
+
+User question: {request.message}
+
+Please provide a helpful recommendation considering the weather and time."""
+
+        # Get AI response
+        ai_chat = get_ai_chat(request.user_id)
+        user_message = UserMessage(text=ai_message)
+        ai_response = await ai_chat.send_message(user_message)
+        
+        # Create chat record
+        chat_record = ChatMessage(
+            message=request.message,
+            response=ai_response,
+            context=context
+        )
+        
+        # Store in database
+        chat_dict = prepare_for_mongo(chat_record.dict())
+        await db.chats.insert_one(chat_dict)
+        
+        return chat_record
+        
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+
+@api_router.get("/weather")
+async def get_weather(lat: float = 28.6139, lon: float = 77.2090):
+    """Get current weather data"""
+    weather = await get_weather_data(lat, lon)
+    return weather
+
+@api_router.post("/routine", response_model=RoutineEntry)
+async def save_routine(request: RoutineRequest):
+    """Save daily routine data"""
+    routine = RoutineEntry(**request.dict())
+    routine_dict = prepare_for_mongo(routine.dict())
+    await db.routines.insert_one(routine_dict)
+    return routine
+
+@api_router.get("/routine/{user_id}")
+async def get_routine_history(user_id: str, limit: int = 7):
+    """Get routine history for a user"""
+    routines = await db.routines.find(
+        {"user_id": user_id}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    return [RoutineEntry(**routine) for routine in routines]
+
+@api_router.get("/chat/history/{user_id}")
+async def get_chat_history(user_id: str, limit: int = 10):
+    """Get chat history for a user"""
+    chats = await db.chats.find().sort("timestamp", -1).limit(limit).to_list(limit)
+    return [ChatMessage(**chat) for chat in chats]
+
+@api_router.get("/news")
+async def get_news():
+    """Get trending news (mock data for MVP)"""
+    return {
+        "news": [
+            {"title": "Tech Innovation Trends 2025", "source": "TechNews", "time": "2 hours ago"},
+            {"title": "Health & Wellness Tips", "source": "HealthToday", "time": "4 hours ago"}, 
+            {"title": "Latest Economic Updates", "source": "BusinessDaily", "time": "6 hours ago"}
+        ]
+    }
 
 # Include the router in the main app
 app.include_router(api_router)
