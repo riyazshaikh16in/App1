@@ -228,15 +228,37 @@ async def get_routine_history(user_id: str, limit: int = 7):
 async def get_chat_history(user_id: str, limit: int = 10):
     """Get chat history for a user"""
     try:
-        # For now, return recent chats without user filtering to test
-        chats_cursor = db.chats.find({}, {"_id": 0}).sort("timestamp", -1).limit(5)
-        chats_raw = await chats_cursor.to_list(5)
+        chats_cursor = db.chats.find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
+        chats_raw = await chats_cursor.to_list(limit)
         
-        # Simple response for testing
-        return {"chats": len(chats_raw), "data": "Chat history endpoint working"}
+        parsed_chats = []
+        for chat_raw in chats_raw:
+            try:
+                # Handle timestamp parsing
+                if isinstance(chat_raw.get('timestamp'), str):
+                    chat_raw['timestamp'] = datetime.fromisoformat(chat_raw['timestamp'].replace('Z', '+00:00'))
+                elif not isinstance(chat_raw.get('timestamp'), datetime):
+                    chat_raw['timestamp'] = datetime.now(timezone.utc)
+                
+                # Create ChatMessage, handling missing fields
+                chat_data = {
+                    'id': chat_raw.get('id', str(uuid.uuid4())),
+                    'message': chat_raw.get('message', ''),
+                    'response': chat_raw.get('response', ''),
+                    'context': chat_raw.get('context'),
+                    'timestamp': chat_raw['timestamp']
+                }
+                
+                chat_obj = ChatMessage(**chat_data)
+                parsed_chats.append(chat_obj)
+            except Exception as e:
+                logger.error(f"Error parsing individual chat: {e}")
+                continue
+        
+        return parsed_chats
     except Exception as e:
-        logger.error(f"Error retrieving chat history: {e}")
-        return {"error": str(e)}
+        logger.error(f"Chat history error: {e}")
+        return []
 
 @api_router.get("/news")
 async def get_news():
