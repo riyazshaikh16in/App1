@@ -224,7 +224,7 @@ function App() {
               Routine
             </TabsTrigger>
             <TabsTrigger value="news" className="data-[state=active]:bg-purple-600 data-[state=active]:text-white">
-              <News className="h-4 w-4 mr-2" />
+              <Newspaper className="h-4 w-4 mr-2" />
               News
             </TabsTrigger>
           </TabsList>
